@@ -4,8 +4,10 @@ Display real-time **5-hour Session** and **Weekly** token usage percentages acro
 
 ## Features
 - **Live Visual Progress Bars:** Shows exact used percentages (`⚡acc1: ▰▰▱▱▱ 35% (W:48%) | acc2: ▱▱▱▱▱ 1% (W:0%)`).
+- **Reset Times:** See when each account's 5-hour session and weekly quota reset next (24-hour clock, local time zone), with a countdown.
 - **Active Account Indicator:** Highlights the currently active account with `⚡`.
-- **Click-to-Refresh:** Click the status bar item anytime to immediately fetch the latest usage stats without opening a terminal.
+- **Rich Hover Card:** Hover the status bar item for per-account usage meters, reset times and token totals. The card stays open when you move the mouse into it and has **Refresh now** and **Settings** buttons.
+- **Click-to-Refresh:** Click the status bar item anytime to immediately fetch the latest usage stats.
 - **Zero External Scripts Required:** Automatically locates `maxpool` across system paths and `nvm` installations.
 
 ## Requirements

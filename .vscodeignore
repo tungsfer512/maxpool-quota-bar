@@ -1,3 +1,5 @@
 *.vsix
 .git/**
 .vscode/**
+images/icon-source.png
+.gitignore

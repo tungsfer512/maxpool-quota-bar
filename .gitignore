@@ -1,0 +1,4 @@
+# Packaged extension builds (create with: npx @vscode/vsce package)
+*.vsix
+
+node_modules/
