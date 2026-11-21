@@ -1,0 +1,54 @@
+{
+  "name": "maxpool-claude-quota-bar",
+  "displayName": "Maxpool Claude Quota Bar",
+  "description": "Monitor real-time session and weekly token usage across multiple Claude accounts via Maxpool directly in the VS Code status bar.",
+  "version": "1.0.0",
+  "publisher": "tungsfer512",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "claude",
+    "claude-code",
+    "maxpool",
+    "quota",
+    "token",
+    "status-bar"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "maxpoolQuota.refreshNow",
+        "title": "Maxpool: Refresh Claude Quota Now"
+      }
+    ],
+    "configuration": {
+      "title": "Maxpool Claude Quota Bar",
+      "properties": {
+        "maxpoolQuota.binaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Custom path to the maxpool executable (leave empty for auto-detection)."
+        },
+        "maxpoolQuota.refreshIntervalSeconds": {
+          "type": "number",
+          "default": 15,
+          "minimum": 5,
+          "description": "Auto-refresh interval in seconds."
+        }
+      }
+    }
+  }
+}
