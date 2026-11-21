@@ -2,8 +2,9 @@
   "name": "maxpool-claude-quota-bar",
   "displayName": "Maxpool Claude Quota Bar",
   "description": "Monitor real-time session and weekly token usage across multiple Claude accounts via Maxpool directly in the VS Code status bar.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "tungsfer512",
+  "icon": "images/icon.png",
   "license": "MIT",
   "repository": {
     "type": "git",
