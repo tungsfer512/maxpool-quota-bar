@@ -3,3 +3,4 @@
 .vscode/**
 images/icon-source.png
 .gitignore
+images/screenshots/**
