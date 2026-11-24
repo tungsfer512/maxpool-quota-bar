@@ -93,36 +93,65 @@ function getJson(options) {
   });
 }
 
-// Next reset time (epoch ms) per account, read from the maxpool server's JSON endpoint.
-// Resolves to an empty Map on any failure; the UI then shows "reset time unavailable".
-async function fetchResetTimes() {
-  const resets = new Map();
-  try {
-    const cfg = JSON.parse(fs.readFileSync(resolveMaxpoolConfigPath(), 'utf8'));
-    const proxy = cfg.proxy || {};
-    if (!proxy.port) return resets;
-    const data = await getJson({
-      host: proxy.host || '127.0.0.1',
-      port: proxy.port,
-      path: '/maxpool/status',
-      headers: { 'x-api-key': proxy.apiKey || '' }
-    });
-    for (const acct of data.accounts || []) {
-      const q = acct.quota || {};
-      resets.set(acct.name, {
-        session: Number.isFinite(q.unified5hReset) ? q.unified5hReset : null,
-        weekly: Number.isFinite(q.unified7dReset) ? q.unified7dReset : null
-      });
-    }
-  } catch (_) {}
-  return resets;
+function readProxyConfig() {
+  const cfg = JSON.parse(fs.readFileSync(resolveMaxpoolConfigPath(), 'utf8'));
+  const proxy = cfg.proxy || {};
+  if (!proxy.port) throw new Error('maxpool config has no proxy.port');
+  return { host: proxy.host || '127.0.0.1', port: proxy.port, apiKey: proxy.apiKey || '' };
 }
 
+const toPct = (v) => (Number.isFinite(v) ? Math.round(v * 100) : null);
+const toTs = (v) => (Number.isFinite(v) ? v : null);
+
+// Primary source: the proxy's /maxpool/status JSON, the same data `maxpool status` prints.
+// It lists every account whatever its name looks like, and carries the reset times.
+async function fetchStatusJson() {
+  const proxy = readProxyConfig();
+  const data = await getJson({
+    host: proxy.host,
+    port: proxy.port,
+    path: '/maxpool/status',
+    headers: { 'x-api-key': proxy.apiKey }
+  });
+  if (!Array.isArray(data.accounts)) throw new Error('unexpected /maxpool/status payload');
+
+  const accounts = data.accounts.map((acct) => {
+    const q = acct.quota || {}; // benched duplicates report quota: null
+    const u = acct.usage || {};
+    return {
+      name: String(acct.name),
+      active: acct.name === data.currentAccount,
+      status: acct.enabled === false ? 'disabled' : acct.status || 'unknown',
+      sessionUsed: toPct(q.unified5h),
+      weeklyUsed: toPct(q.unified7d),
+      sessionReset: toTs(q.unified5hReset),
+      weeklyReset: toTs(q.unified7dReset),
+      usage: Number.isFinite(u.totalRequests)
+        ? {
+            tokens: (u.totalInputTokens || 0) + (u.totalOutputTokens || 0),
+            paid: Number.isFinite(u.totalPaidTokens) ? u.totalPaidTokens : null,
+            requests: u.totalRequests
+          }
+        : null
+    };
+  });
+
+  const routing =
+    data.routing && data.routing.mode === 'preferred'
+      ? `prefer ${data.routing.preferredAccount} with automatic failover`
+      : 'automatic load balancing';
+  const switchAt = Number.isFinite(data.switchThreshold)
+    ? `${(data.switchThreshold * 100).toFixed(0)}%`
+    : '';
+  return { accounts, routing, switchAt };
+}
+
+// Fallback source: the text output of `maxpool status` (it has no reset times).
 function parseMaxpoolStatus(output) {
   const accounts = [];
   let current = null;
   let routing = '';
-  let switchAt = '90%';
+  let switchAt = '';
 
   for (const line of output.split(/\r?\n/)) {
     const routeMatch = line.match(/^Routing:\s*(.+)/);
@@ -131,16 +160,19 @@ function parseMaxpoolStatus(output) {
     const switchMatch = line.match(/^Switch at:\s*([0-9.]+%)/);
     if (switchMatch) switchAt = switchMatch[1];
 
-    const accMatch = line.match(/^\s+([a-zA-Z0-9_-]+)\s+\(oauth\)(\s*\*)?/);
+    // Account header, e.g. "  me@example.com (oauth) *". Names may contain any character.
+    const accMatch = line.match(/^ {2}(\S.*?)\s+\(([a-z-]+)\)(\s*\*)?\s*$/);
     if (accMatch) {
       if (current) accounts.push(current);
       current = {
         name: accMatch[1],
-        active: Boolean(accMatch[2]),
-        status: 'active',
-        sessionUsed: 0,
-        weeklyUsed: 0,
-        totalInfo: ''
+        active: Boolean(accMatch[3]),
+        status: 'unknown',
+        sessionUsed: null,
+        weeklyUsed: null,
+        sessionReset: null,
+        weeklyReset: null,
+        usage: null
       };
       continue;
     }
@@ -150,19 +182,44 @@ function parseMaxpoolStatus(output) {
     const statusMatch = line.match(/^\s+Status:\s*(.+)/);
     if (statusMatch) current.status = statusMatch[1].trim();
 
-    if (line.includes('Session:')) {
-      const sMatch = line.match(/Session:\s*([0-9.]+)%/);
-      const wMatch = line.match(/Weekly:\s*([0-9.]+)%/);
-      if (sMatch) current.sessionUsed = Math.round(parseFloat(sMatch[1]));
-      if (wMatch) current.weeklyUsed = Math.round(parseFloat(wMatch[1]));
-    }
+    const sMatch = line.match(/Session:\s*([0-9.]+)%/);
+    const wMatch = line.match(/Weekly:\s*([0-9.]+)%/);
+    if (sMatch) current.sessionUsed = Math.round(parseFloat(sMatch[1]));
+    if (wMatch) current.weeklyUsed = Math.round(parseFloat(wMatch[1]));
 
-    const totalMatch = line.match(/^\s+Total:\s*(.+)/);
-    if (totalMatch) current.totalInfo = totalMatch[1].trim();
+    const totalMatch = line.match(/^\s+Total:\s*(\d+)\s+tokens(?:\s+\(paid\s+(\d+)\))?,\s*(\d+)\s+requests?/);
+    if (totalMatch) {
+      current.usage = {
+        tokens: +totalMatch[1],
+        paid: totalMatch[2] != null ? +totalMatch[2] : null,
+        requests: +totalMatch[3]
+      };
+    }
   }
 
   if (current) accounts.push(current);
   return { accounts, routing, switchAt };
+}
+
+function runMaxpoolStatus() {
+  return new Promise((resolve, reject) => {
+    const { bin, binDir } = resolveMaxpoolBinary();
+    const env = { ...process.env };
+    if (binDir) env.PATH = `${binDir}${path.delimiter}${env.PATH || ''}`;
+    execFile(bin, ['status'], { env, timeout: 8000, shell: isWin }, (err, stdout) => {
+      if (err || !stdout) reject(err || new Error('empty output'));
+      else resolve(parseMaxpoolStatus(stdout));
+    });
+  });
+}
+
+// Rejects only when both sources fail, which means the proxy is offline.
+async function fetchStatus() {
+  try {
+    return await fetchStatusJson();
+  } catch (_) {
+    return runMaxpoolStatus();
+  }
 }
 
 // ── Formatting ──────────────────────────────────────────────
@@ -194,6 +251,11 @@ function formatReset(ts) {
   return `**${clock}** · _in ${rel}_`;
 }
 
+const fmtPct = (pct) => (pct == null ? '—' : `${pct}%`);
+
+// Highest known usage of an account (session or weekly); 0 when neither is reported.
+const peakUsage = (acc) => Math.max(0, ...[acc.sessionUsed, acc.weeklyUsed].filter((n) => n != null));
+
 // Severity is carried by theme color plus icon, never by color alone.
 function usageLevel(pct) {
   if (pct >= 90) return { color: 'var(--vscode-charts-red)', icon: ' $(error)' };
@@ -201,16 +263,12 @@ function usageLevel(pct) {
   return { color: 'var(--vscode-charts-green)', icon: '' };
 }
 
-function meter(pct, segments) {
-  const filled = Math.min(segments, Math.max(0, Math.round((pct / 100) * segments)));
-  return { filled, empty: segments - filled };
-}
-
 // 10-segment bullet bar: the used part takes the severity color, the rest is muted
 function tooltipBar(pct) {
-  const { filled, empty } = meter(pct, 10);
+  if (pct == null) return muted('□'.repeat(10));
+  const filled = Math.min(10, Math.max(0, Math.round(pct / 10)));
   const used = filled ? `<span style="color:${usageLevel(pct).color};">${'■'.repeat(filled)}</span>` : '';
-  return used + (empty ? muted('□'.repeat(empty)) : '');
+  return used + (filled < 10 ? muted('□'.repeat(10 - filled)) : '');
 }
 
 function compactNumber(n) {
@@ -220,24 +278,30 @@ function compactNumber(n) {
   return String(n);
 }
 
-// "93934957 tokens (paid 6662441), 397 requests" → "93.9M tokens · 6.7M paid · 397 requests"
-function formatTotal(info) {
-  const m = info.match(/^(\d+)\s+tokens(?:\s+\(paid\s+(\d+)\))?,\s*(\d+)\s+requests?/);
-  if (!m) return info;
-  const parts = [`${compactNumber(+m[1])} tokens`];
-  if (m[2]) parts.push(`${compactNumber(+m[2])} paid`);
-  parts.push(`${m[3]} requests`);
+// { tokens: 93934957, paid: 6662441, requests: 397 } → "93.9M tokens · 6.7M paid · 397 requests"
+function formatUsage(usage) {
+  const parts = [`${compactNumber(usage.tokens)} tokens`];
+  if (usage.paid != null) parts.push(`${compactNumber(usage.paid)} paid`);
+  parts.push(`${usage.requests} requests`);
   return parts.join(' · ');
 }
 
-// Escape text coming from the CLI before it goes into Markdown, HTML or a table cell
+// Escape text coming from Maxpool before it goes into Markdown, HTML or a table cell.
+// "@" becomes an entity so e-mail style account names don't turn into mailto links.
 function escapeMd(s) {
   return String(s)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
+    .replace(/@/g, '&#64;')
     .replace(/\|/g, '\\|')
     .replace(/([*_`$\[\]])/g, '\\$1');
+}
+
+// Status bar names are cut to `maxLength` characters plus "…" (0 = never cut).
+function truncateName(name, maxLength) {
+  const chars = Array.from(name);
+  return maxLength > 0 && chars.length > maxLength ? `${chars.slice(0, maxLength).join('')}…` : name;
 }
 
 function statusBadge(status) {
@@ -249,7 +313,8 @@ function statusBadge(status) {
 
 // ── Status bar ──────────────────────────────────────────────
 
-function statusBarView(state) {
+// Every account is listed: "⚡name: 24% (W:4%)". Meters live in the hover card only.
+function statusBarView(state, nameLength = 10) {
   if (state.kind === 'loading') return { text: '$(sync~spin) Claude...', level: 'normal' };
   if (state.kind === 'offline') return { text: '⚠️ Claude: Offline', level: 'error' };
   if (state.kind === 'empty') return { text: '⚠️ Claude: No Acc', level: 'warning' };
@@ -257,8 +322,8 @@ function statusBarView(state) {
   const { accounts } = state;
   // Color follows the account in use, or turns red when every account is nearly exhausted
   const activeAcc = accounts.find((a) => a.active) || accounts[0];
-  const activeMax = Math.max(activeAcc.sessionUsed, activeAcc.weeklyUsed);
-  const minAll = Math.min(...accounts.map((a) => Math.max(a.sessionUsed, a.weeklyUsed)));
+  const activeMax = peakUsage(activeAcc);
+  const minAll = Math.min(...accounts.map(peakUsage));
 
   let level = 'normal';
   if (minAll >= 90 || activeMax >= 90) level = 'error';
@@ -266,9 +331,8 @@ function statusBarView(state) {
 
   const text = accounts
     .map((acc) => {
-      const { filled, empty } = meter(Math.max(acc.sessionUsed, acc.weeklyUsed), 5);
-      const bar = '▰'.repeat(filled) + '▱'.repeat(empty);
-      return `${acc.active ? '⚡' : ''}${acc.name}: ${bar} ${acc.sessionUsed}% (W:${acc.weeklyUsed}%)`;
+      const name = truncateName(acc.name, nameLength);
+      return `${acc.active ? '⚡' : ''}${name}: ${fmtPct(acc.sessionUsed)} (W:${fmtPct(acc.weeklyUsed)})`;
     })
     .join('  |  ');
 
@@ -330,18 +394,19 @@ function buildTooltip(state, refreshing) {
   }
 
   for (const acc of state.accounts) {
-    const r = state.resets.get(acc.name) || {};
     const name = `${acc.active ? '$(zap)' : '$(account)'} ${escapeMd(acc.name)}`;
-    const row = (label, pct, resetTs) =>
-      `| ${label} | ${tooltipBar(pct)} | **${pct}%**${usageLevel(pct).icon} | ${formatReset(resetTs)} |\n`;
+    const row = (label, pct, resetTs) => {
+      const icon = pct == null ? '' : usageLevel(pct).icon;
+      return `| ${label} | ${tooltipBar(pct)} | **${fmtPct(pct)}**${icon} | ${formatReset(resetTs)} |\n`;
+    };
 
     md.appendMarkdown('---\n\n');
     md.appendMarkdown(`| **${name}** | ${statusBadge(acc.status)} | | $(history) Resets |\n`);
     md.appendMarkdown('| :--- | :--- | ---: | :--- |\n');
-    md.appendMarkdown(row('Session · 5h', acc.sessionUsed, r.session));
-    md.appendMarkdown(row('Weekly · 7d', acc.weeklyUsed, r.weekly));
-    if (acc.totalInfo) {
-      md.appendMarkdown(`\n<small>$(graph) ${escapeMd(formatTotal(acc.totalInfo))}</small>\n\n`);
+    md.appendMarkdown(row('Session · 5h', acc.sessionUsed, acc.sessionReset));
+    md.appendMarkdown(row('Weekly · 7d', acc.weeklyUsed, acc.weeklyReset));
+    if (acc.usage) {
+      md.appendMarkdown(`\n<small>$(graph) ${escapeMd(formatUsage(acc.usage))}</small>\n\n`);
     }
   }
 
@@ -361,7 +426,9 @@ function activate(context) {
   let timer = null;
 
   const render = (manual = false) => {
-    const view = statusBarView(state);
+    const config = vscode.workspace.getConfiguration('maxpoolQuota');
+    const nameLength = config.get('statusBarNameLength');
+    const view = statusBarView(state, Number.isFinite(nameLength) ? Math.max(0, nameLength) : 10);
     item.text = manual && inFlight ? '$(sync~spin) Updating...' : view.text;
     item.tooltip = buildTooltip(state, Boolean(inFlight));
     applyBackgroundColor(item, view.level);
@@ -370,29 +437,18 @@ function activate(context) {
   // Overlapping calls (timer + manual refresh) share one run
   const refresh = (manual = false) => {
     if (inFlight) return inFlight;
-    inFlight = new Promise((resolve) => {
-      const { bin, binDir } = resolveMaxpoolBinary();
-      const env = { ...process.env };
-      if (binDir) env.PATH = `${binDir}${path.delimiter}${env.PATH || ''}`;
-
-      const resetsPromise = fetchResetTimes();
-      execFile(bin, ['status'], { env, timeout: 8000, shell: isWin }, async (err, stdout) => {
-        const resets = await resetsPromise;
+    inFlight = fetchStatus()
+      .then((data) => {
         const now = new Date();
-        if (err || !stdout) {
-          state = { kind: 'offline', updatedAt: now };
-        } else {
-          const parsed = parseMaxpoolStatus(stdout);
-          state = parsed.accounts.length
-            ? { kind: 'ok', ...parsed, resets, updatedAt: now }
-            : { kind: 'empty', updatedAt: now };
-        }
-        resolve();
+        state = data.accounts.length ? { kind: 'ok', ...data, updatedAt: now } : { kind: 'empty', updatedAt: now };
+      })
+      .catch(() => {
+        state = { kind: 'offline', updatedAt: new Date() };
+      })
+      .finally(() => {
+        inFlight = null;
+        render();
       });
-    }).finally(() => {
-      inFlight = null;
-      render();
-    });
     if (manual) render(true); // spinner in the status bar and the tooltip
     return inFlight;
   };

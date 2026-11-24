@@ -8,7 +8,7 @@ The extension reads usage from [Maxpool](https://github.com/2solarmax/maxpool), 
 
 ## Features
 
-- **All accounts at a glance.** The status bar shows a meter, the session percentage and the weekly percentage for every account. The account Maxpool currently routes to is marked with `⚡`.
+- **All accounts at a glance.** The status bar lists every account in Maxpool with its session and weekly percentage (`⚡work: 68% (W:53%)`). The account Maxpool currently routes to is marked with `⚡`. Names longer than 10 characters are shortened (`team-share…`); the hover card always shows the full name.
 - **Reset times.** For each account, see when the 5-hour session and the weekly quota reset next. Times use a 24-hour clock in your machine's time zone, with a countdown (`19:10 · in 3h 52m`, `Fri 27/11 03:00 · in 5d 11h`).
 - **Hover card you can use.** Hover the status bar item for usage meters, reset times and token totals per account. You can move the mouse into the card, which has **Refresh now** and **Settings** buttons.
 - **Early warning.** The status bar item turns yellow at 75% and red at 90%. Inside the card, every meter is colored and gets a warning or error icon, so you never have to rely on color alone.
@@ -72,6 +72,7 @@ Then run **Developer: Reload Window**.
 | :--- | :--- | :--- |
 | `maxpoolQuota.binaryPath` | `""` | Full path to the `maxpool` executable. Leave empty to detect it automatically. |
 | `maxpoolQuota.refreshIntervalSeconds` | `15` | How often usage refreshes, in seconds (minimum `5`). |
+| `maxpoolQuota.statusBarNameLength` | `10` | Maximum characters shown for each account name in the status bar. Longer names end with `…`. Set to `0` to show full names. |
 
 ## Commands
 
@@ -81,17 +82,16 @@ Then run **Developer: Reload Window**.
 
 ## How it works
 
-On every refresh the extension does two things at the same time:
+On every refresh the extension reads the proxy's `/maxpool/status` endpoint, the same data `maxpool status` prints. It gives every account, whatever its name looks like, with its status, session and weekly usage, reset times and token totals. The proxy address and API key come from Maxpool's config file, found the same way Maxpool finds it: `$MAXPOOL_CONFIG`, then `$XDG_CONFIG_HOME/maxpool.json`, then `~/.config/maxpool.json`.
 
-1. It runs `maxpool status` to read the routing mode and each account's status, session usage, weekly usage and token totals.
-2. It calls the proxy's `/maxpool/status` endpoint to read reset times, which the CLI doesn't print. The proxy address and API key come from Maxpool's config file, found the same way Maxpool finds it: `$MAXPOOL_CONFIG`, then `$XDG_CONFIG_HOME/maxpool.json`, then `~/.config/maxpool.json`.
+If that fails, for example because the config file is somewhere else, the extension runs `maxpool status` and reads its text output instead. Usage still shows, but reset times don't, because the command doesn't print them.
 
 The extension only talks to the local `maxpool` command and to the proxy address in Maxpool's config file. It sends no data anywhere else.
 
 ## Troubleshooting
 
 - **The status bar shows "Claude: Offline".** Start the proxy with `maxpool server`, then click the status bar item or **Refresh now**. If `maxpool` isn't on a standard path, set `maxpoolQuota.binaryPath`.
-- **Reset times show "—".** The extension couldn't reach `/maxpool/status`. Check that the proxy is running and that `proxy.port` and `proxy.apiKey` in Maxpool's config are correct. Usage percentages still work without it.
+- **Reset times show "—".** The extension couldn't reach `/maxpool/status` and fell back to `maxpool status`. Check that the proxy is running and that `proxy.port` and `proxy.apiKey` in Maxpool's config are correct. A session reset also shows "—" while an account hasn't started a session window yet.
 - **The status bar shows "Claude: No Acc".** Maxpool has no Claude accounts yet. Add one with `maxpool login`.
 
 ## License
