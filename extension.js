@@ -253,9 +253,6 @@ function formatReset(ts) {
 
 const fmtPct = (pct) => (pct == null ? '—' : `${pct}%`);
 
-// Highest known usage of an account (session or weekly); 0 when neither is reported.
-const peakUsage = (acc) => Math.max(0, ...[acc.sessionUsed, acc.weeklyUsed].filter((n) => n != null));
-
 // Severity is carried by theme color plus icon, never by color alone.
 function usageLevel(pct) {
   if (pct >= 90) return { color: 'var(--vscode-charts-red)', icon: ' $(error)' };
@@ -313,40 +310,21 @@ function statusBadge(status) {
 
 // ── Status bar ──────────────────────────────────────────────
 
-// Every account is listed: "⚡name: 24% (W:4%)". Meters live in the hover card only.
+// Every account is listed: "⚡name: 24% (W:4%)". Plain text with no background color;
+// meters and severity colors live in the hover card only.
 function statusBarView(state, nameLength = 10) {
-  if (state.kind === 'loading') return { text: '$(sync~spin) Claude...', level: 'normal' };
-  if (state.kind === 'offline') return { text: '⚠️ Claude: Offline', level: 'error' };
-  if (state.kind === 'empty') return { text: '⚠️ Claude: No Acc', level: 'warning' };
+  if (state.kind === 'loading') return { text: '$(sync~spin) Claude...' };
+  if (state.kind === 'offline') return { text: '⚠️ Claude: Offline' };
+  if (state.kind === 'empty') return { text: '⚠️ Claude: No Acc' };
 
-  const { accounts } = state;
-  // Color follows the account in use, or turns red when every account is nearly exhausted
-  const activeAcc = accounts.find((a) => a.active) || accounts[0];
-  const activeMax = peakUsage(activeAcc);
-  const minAll = Math.min(...accounts.map(peakUsage));
-
-  let level = 'normal';
-  if (minAll >= 90 || activeMax >= 90) level = 'error';
-  else if (activeMax >= 75) level = 'warning';
-
-  const text = accounts
+  const text = state.accounts
     .map((acc) => {
       const name = truncateName(acc.name, nameLength);
       return `${acc.active ? '⚡' : ''}${name}: ${fmtPct(acc.sessionUsed)} (W:${fmtPct(acc.weeklyUsed)})`;
     })
     .join('  |  ');
 
-  return { text, level };
-}
-
-function applyBackgroundColor(item, level) {
-  if (level === 'error') {
-    item.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
-  } else if (level === 'warning') {
-    item.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
-  } else {
-    item.backgroundColor = undefined;
-  }
+  return { text };
 }
 
 // ── Tooltip ─────────────────────────────────────────────────
@@ -388,9 +366,13 @@ function buildTooltip(state, refreshing) {
 
   md.appendMarkdown('#### $(pulse) Maxpool Claude Quota\n\n');
   if (state.routing) {
-    md.appendMarkdown(
-      `<small>$(arrow-swap) ${escapeMd(state.routing)} · switch at **${state.switchAt}**</small>\n\n`
-    );
+    // "prefer <account> with automatic failover" → the account name in bold
+    const preferred = state.routing.match(/^prefer (.+) with automatic failover$/);
+    const routing = preferred
+      ? `prefer **${escapeMd(preferred[1])}** with automatic failover`
+      : escapeMd(state.routing);
+    const switchAt = state.switchAt ? ` · switch at **${state.switchAt}**` : '';
+    md.appendMarkdown(`<small>$(arrow-swap) ${routing}${switchAt}</small>\n\n`);
   }
 
   for (const acc of state.accounts) {
@@ -431,7 +413,6 @@ function activate(context) {
     const view = statusBarView(state, Number.isFinite(nameLength) ? Math.max(0, nameLength) : 10);
     item.text = manual && inFlight ? '$(sync~spin) Updating...' : view.text;
     item.tooltip = buildTooltip(state, Boolean(inFlight));
-    applyBackgroundColor(item, view.level);
   };
 
   // Overlapping calls (timer + manual refresh) share one run

@@ -11,20 +11,22 @@ The extension reads usage from [Maxpool](https://github.com/2solarmax/maxpool), 
 - **All accounts at a glance.** The status bar lists every account in Maxpool with its session and weekly percentage (`⚡work: 68% (W:53%)`). The account Maxpool currently routes to is marked with `⚡`. Names longer than 10 characters are shortened (`team-share…`); the hover card always shows the full name.
 - **Reset times.** For each account, see when the 5-hour session and the weekly quota reset next. Times use a 24-hour clock in your machine's time zone, with a countdown (`19:10 · in 3h 52m`, `Fri 27/11 03:00 · in 5d 11h`).
 - **Hover card you can use.** Hover the status bar item for usage meters, reset times and token totals per account. You can move the mouse into the card, which has **Refresh now** and **Settings** buttons.
-- **Early warning.** The status bar item turns yellow at 75% and red at 90%. Inside the card, every meter is colored and gets a warning or error icon, so you never have to rely on color alone.
+- **Early warning in the card.** Inside the hover card, every meter turns yellow at 75% and red at 90% and gets a warning or error icon, so you never have to rely on color alone. The status bar itself stays plain text.
 - **Click to refresh.** Click the status bar item to fetch the latest numbers right away. Usage also refreshes on its own every 15 seconds by default.
 - **No setup.** The extension finds `maxpool` in common install locations, including `nvm`, and reads the proxy address from Maxpool's own config.
 
 ## Status bar
 
-![The status bar item in its normal, warning, critical and offline states](images/screenshots/status-bar.png)
+![The status bar item listing three accounts, and the offline message](images/screenshots/status-bar.png)
 
-| State | When |
+The status bar item is plain text with no background color, so it blends in with the rest of the status bar.
+
+| Text | Meaning |
 | :--- | :--- |
-| Normal | The account in use is below 75% of its session and weekly quota |
-| Warning (yellow) | The account in use reached 75% |
-| Critical (red) | The account in use reached 90%, or every account is at 90% or more |
-| Offline | The Maxpool proxy is not reachable |
+| `⚡work: 68% (W:53%)` | Session and weekly usage for each account. `⚡` marks the account Maxpool routes to. |
+| `—` | Maxpool doesn't report that number for the account |
+| `⚠️ Claude: Offline` | The Maxpool proxy is not reachable |
+| `⚠️ Claude: No Acc` | Maxpool has no Claude accounts yet |
 
 ## Hover card
 
